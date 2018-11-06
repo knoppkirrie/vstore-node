@@ -1,5 +1,7 @@
 # StorageNode for the vStore Framework
 
+A sample implementation of a storage node for the *vStore* framework. Please refer to the framework's [main repository](https://github.com/Telecooperation/vstore-framework) and [Wiki](https://github.com/Telecooperation/vstore-framework/wiki) for further documentation. 
+
 ## Installation on a Raspberry Pi
 
 ### Install node.js:
