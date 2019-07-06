@@ -1,10 +1,12 @@
 var NODE_PORT = 50001;
-var NODE_TYPE = "CLOUDLET";
+var NODE_TYPE = "PRIVATE_NODE";
 
 const uuidv4 = require('uuid/v4');
 var express = require('express');
 var multer  = require('multer')
 var upload = multer({ dest: './tmp_upload/' })
+
+var bodyParser = require('body-parser')
 
 var mongoose = require('mongoose');
 mongoose.Promise = global.Promise;
@@ -20,6 +22,8 @@ var port = process.env.PORT || NODE_PORT;
 var mongo_express = require('mongo-express/lib/middleware')
 var mongo_express_config = require('./mongo_express_config.js')
 app.use('/admin', mongo_express(mongo_express_config))
+
+app.use(bodyParser.json())
 
 dbConn.once('open', function() {
     console.log("Mongoose DB connection to mongoDB now open!");

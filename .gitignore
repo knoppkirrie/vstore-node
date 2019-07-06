@@ -8,3 +8,6 @@ Thumbs.db
 
 # nodejs related entries
 node_modules/
+
+# tmp folders
+tmp_upload/
