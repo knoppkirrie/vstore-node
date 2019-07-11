@@ -70,6 +70,15 @@ module.exports = function(mongoose) {
         isPrivate: Boolean,
         phoneID: String
     });
+
+    var FileAccessSchema = Schema(
+    {
+        uuid: String,
+        file: String,
+        geohash: String,
+        timeOfWeek: String,
+        totalMinutes: Number
+    });
     
     var models = {
         Location : mongoose.model('Location', LocationSchema),
@@ -78,7 +87,8 @@ module.exports = function(mongoose) {
         Noise : mongoose.model('Noise', NoiseSchema),
         Network : mongoose.model('Network', NetworkSchema),
         Context : mongoose.model('Context', ContextSchema),
-        File : mongoose.model('File', FileSchema)
+        File : mongoose.model('File', FileSchema),
+        FileAccess: mongoose.model('FileAccess', FileAccessSchema)
     };
     return models;
 }

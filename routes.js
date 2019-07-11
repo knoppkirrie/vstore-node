@@ -690,6 +690,61 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
     });
 
 
+    //*******************//
+    //*** REPLICATION ***//
+    //*******************//
+
+    app.post('/fileAccess/insert', function(req, res)
+    {
+        console.log('['+getDateTime()+'] FileAccess request received');
+
+        if ( !req.body || !req.body.fileAccesses)
+        {
+            console.log("["+getDateTime()+"] FileAccess request is invalid.");
+            // console.log(req);
+            console.log(req.body);
+            res.status(400).json({'error':1, 'error_msg':"Malformed request."});
+            return;
+        }
+
+        console.log(req.body)
+
+        var array = req.body.fileAccesses;
+
+        for (var i in array) {
+            var uuid = array[i].uuid;
+            var file = array[i].file;
+            var geohash = array[i].geohash;
+            var timeOfWeek = array[i].timeOfWeek;
+            var totalMinutes = array[i].totalMinutes;
+
+            var fa = new m.FileAccess(
+                {
+                    'uuid' : uuid,
+                    'file': file,
+                    'geohash': geohash,
+                    'timeOfWeek': timeOfWeek,
+                    'totalMinutes': totalMinutes
+                });
+        
+            fa.save(function(err){
+
+                // if (err) {
+                //     console.log("Error occurred:");
+                //     console.log("uuid: " + uuid);
+                //     console.log("file: " + file);
+                //     console.log("geohash: " + geohash);
+                //     console.log("tow: " + timeOfWeek);
+                //     console.log("totalMinutes: " + totalMinutes);
+                // }
+
+            });
+        }
+        
+        res.status(200).json({'error':0, 'reply':'FileAccess objs added to node db.'});
+    });
+
+
 
     /**
      * Tries to parse the given json string into a ContextSchema
