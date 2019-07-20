@@ -717,6 +717,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
             var geohash = array[i].geohash;
             var timeOfWeek = array[i].timeOfWeek;
             var totalMinutes = array[i].totalMinutes;
+            var deviceId = array[i].deviceId;
 
             var fa = new m.FileAccess(
                 {
@@ -724,7 +725,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     'file': file,
                     'geohash': geohash,
                     'timeOfWeek': timeOfWeek,
-                    'totalMinutes': totalMinutes
+                    'totalMinutes': totalMinutes,
+                    'deviceId': deviceId
                 });
         
             fa.save(function(err){
