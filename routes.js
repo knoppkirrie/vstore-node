@@ -3,6 +3,9 @@ var Thumbnail = require('thumbnail');
 var tmp_thumb_dir = './tmp_thumb';
 const md5File = require('md5-file');
 
+var geohash = require('ngeohash');
+const GEOHASH_COMPARE_PRECISION = 5;
+
 if(!fs.existsSync(tmp_thumb_dir)) {
     fs.mkdirSync(tmp_thumb_dir);
 }
@@ -710,6 +713,9 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
         console.log(req.body)
 
         var array = req.body.fileAccesses;
+       
+        var fileGeohashSet = new Set();     // stores keys for later retrieval of FileAccessLocations from node-DB
+        // var fullSet = new Set();            // stores full FileAccess objects
 
         for (var i in array) {
             var uuid = array[i].uuid;
@@ -719,16 +725,27 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
             var totalMinutes = array[i].totalMinutes;
             var deviceId = array[i].deviceId;
 
+            // var fileHashPair = {
+            //     "file": file,
+            //     "hash": geohash.substring(0, GEOHASH_COMPARE_PRECISION)     
+            // }
+
+            var fileHashPair = file + '###' + geohash.substring(0, GEOHASH_COMPARE_PRECISION);   // separate by '###' to bypass object equality check in Set
+
+            fileGeohashSet.add(fileHashPair); 
+
             var fa = new m.FileAccess(
-                {
-                    'uuid' : uuid,
-                    'file': file,
-                    'geohash': geohash,
-                    'timeOfWeek': timeOfWeek,
-                    'totalMinutes': totalMinutes,
-                    'deviceId': deviceId
-                });
-        
+            {
+                'uuid' : uuid,
+                'file': file,
+                'geohash': geohash,
+                'timeOfWeek': timeOfWeek,
+                'totalMinutes': totalMinutes,
+                'deviceId': deviceId
+            });
+
+            // fullSet.add(fa);
+                
             fa.save(function(err){
 
                 // if (err) {
@@ -744,8 +761,69 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
         }
         
         res.status(200).json({'error':0, 'reply':'FileAccess objs added to node db.'});
+
+        // calculate new MeanAccessLocations
+        calculateMeanAccessLocations( fileGeohashSet /*, fullSet */);
+
+
     });
 
+
+    function calculateMeanAccessLocations( keySet /*, fullSet */ ) {
+        
+        console.log("Accessed files and Geohashes:");
+        console.log(keySet);
+        // console.log(fullSet);
+
+        // for all file/geohash pairs in accessedFiles:
+        // - get existing FileAccessLocations with pairs from keySet from node-DB
+
+        keySet.forEach(function(fileHashPair) {
+
+            var pair = fileHashPair.split('###');
+            var file = pair[0];
+            var geohash = pair[1];
+
+            var query = {file: file, geohash: new RegExp('^' + geohash)};   // regex is similar to 'geohash%' in SQL
+
+            m.FileAccess.find(query, function(err, result) 
+            {
+                if (err) {
+                    console.log("Error:")
+                    console.log(err)
+                    return
+                }
+
+                if (!result) {
+                    console.log("No result")
+                    return
+                }
+
+                if (result.length > 0) {
+                    console.log("No. of retrieved FileAccess objs: " + result.length)
+
+                    // TODO: calculate center point for all positions
+
+                    // TODO: update FileAccessLocation if already present,
+                    //          insert new otherwise
+
+
+                } else {
+                    console.log("Result array empty!")  // should never be the case
+                }
+            })
+
+        });
+
+        
+
+
+        // - compare to FileAccess objs in fullSet
+        // - 
+    
+
+
+    }
 
 
     /**

@@ -80,6 +80,15 @@ module.exports = function(mongoose) {
         totalMinutes: Number,
         deviceId: String
     });
+
+    var FileAccessLocationSchema = Schema(
+    {
+        geohash: String,
+        counter: Number,
+        file: String
+
+
+    });
     
     var models = {
         Location : mongoose.model('Location', LocationSchema),
@@ -89,7 +98,8 @@ module.exports = function(mongoose) {
         Network : mongoose.model('Network', NetworkSchema),
         Context : mongoose.model('Context', ContextSchema),
         File : mongoose.model('File', FileSchema),
-        FileAccess: mongoose.model('FileAccess', FileAccessSchema)
+        FileAccess: mongoose.model('FileAccess', FileAccessSchema),
+        FileAccessLocation: mongoose.model('FileAccessLocation', FileAccessLocationSchema)
     };
     return models;
 }
