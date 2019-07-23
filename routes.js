@@ -739,8 +739,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
             });
 
             counter++;
-            
-            // fullSet.add(fa);
                 
             fa.save(function(err){
 
@@ -835,7 +833,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                             fal.save(function(err) { 
                                 if (err) {
-                                    console.log("[" + getDateTime() + "] Error saving new FileAccessLocation to MongoDB");
+                                    console.log("[" + getDateTime() + "] Error saving new FileAccessLocation to MongoDB:");
+                                    console.log(err);
                                     return;
                                 }
 
@@ -861,7 +860,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
 
                 } else {
-                    console.log("Result array empty!")  // should never be the case
+                    console.log("[" + getDateTime() + "] No FileAccess entries in MongoDB!")  // should never be the case
                 }
             })
 
