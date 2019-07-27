@@ -3,9 +3,20 @@ var Thumbnail = require('thumbnail');
 var tmp_thumb_dir = './tmp_thumb';
 const md5File = require('md5-file');
 
+// ----- REPLICATION vars and consts below -----
+var MASTER_NODE_URL = "http://localhost";
+var MASTER_NODE_PORT = 50000;
+var MASTER_API_VERSION = "v1";
+
 var nGeohash = require('ngeohash');
 const GEOHASH_COMPARE_PRECISION = 5;
 const GEOHASH_PRECISION = 9;    // highest possible
+
+const REPLICATION_COUNTER_THRESHOLD = 2;
+
+var cron = require('node-cron');
+var request = require('request');
+// ----- REPLICATION vars and consts above -----
 
 if(!fs.existsSync(tmp_thumb_dir)) {
     fs.mkdirSync(tmp_thumb_dir);
@@ -694,9 +705,162 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
     });
 
 
-    //*******************//
-    //*** REPLICATION ***//
-    //*******************//
+    //*************************//
+    //*** REPLICATION BELOW ***//
+    //*************************//
+
+    app.post('/replication/data', upload.single('filedata'), function(req, res) {
+        
+        console.log('['+getDateTime()+'] Replication request received');
+
+
+        // TODO
+        console.log("--------- RECEIVED BODY ----------")
+        console.log(req.body)
+
+        var original = req.file.originalname;
+        var uuid = req.file.originalname.replace(/\.[^/.]+$/, "");
+
+        console.log("Original name: " + original);
+        console.log("Regex replaced name: " + uuid);
+        console.log("Metadata: " + req.body.metadata);
+
+        var metadata = JSON.parse(req.body.metadata);
+        delete metadata._id;
+        delete metadata.__v;
+        console.log("File JSON: " + metadata);
+        var fileModel = new m.File(metadata);
+
+        // check if file is already present:
+        m.File.findOne({uuid: metadata.uuid}, function(error, file) {
+            if (error) {
+                console.log('['+getDateTime()+'] File lookup failed!');
+
+                // TODO: send error status code
+                res.status(500).json({"error": 1, "error_msg": "Failed to replicate file!"})
+                return;
+            }
+
+            if (file) {
+                console.log('['+getDateTime()+'] File already present on this node.');
+                res.status(200).json({"error": 0, "msg": "Replication succeeded: File is already here."})
+                return;
+            }
+
+            // // save file and metadata to DB 
+            // fs.createReadStream(req.file.path).pipe(gfs.createWriteStream({
+            //     filename: uuid
+            // }));
+
+            var mimetype = metadata.mimetype;
+            var extension = metadata.extension;
+            // COPY FROM app.post('/file/data', ...) :
+            //First, write to GridFS, then create thumbnail,
+            //then save metadata in database
+            var writestream = gfs.createWriteStream(
+            {
+                filename: uuid
+            });
+            fs.createReadStream(req.file.path).pipe(writestream);
+            var thumbWriteStream = gfs.createWriteStream(
+            {
+                filename: 'thumb_'+uuid
+            });
+
+            //Create a thumbnail according to the filetype.
+            //Needs improvement.
+            if(image_types.includes(mimetype))
+            {
+                //Rename file to have file extension so that
+                //thumbnail module will accept it
+                fs.renameSync(req.file.path, req.file.path+"."+extension);
+                //Create thumbnail and store in GridFS as well
+                var original_path = req.file.destination;
+                var thumbnail = new Thumbnail(original_path, tmp_thumb_dir);
+                thumbnail.ensureThumbnail(req.file.filename+"."+extension, 256, null, function(err, createdThumbName)
+                {
+                    if(err) { console.log("Error creating image thumbnail. Details: " + err); return; }
+                    fs.createReadStream(tmp_thumb_dir + '/' + createdThumbName).pipe(thumbWriteStream);
+                    thumbWriteStream.on('close', function(file)
+                    {
+                        //Store meta information in document
+                        fileModel.save(function(err){});
+                        res.status(201).json({'error':0, 'reply':'Replication succeeded: File stored successfully.'});
+                        //Delete both tempfiles (thumb and original file)
+                        fs.unlinkSync(tmp_thumb_dir + '/' + createdThumbName);
+                        fs.unlinkSync(req.file.path+"."+extension);
+                    });
+                });
+            }
+            else if(video_types.includes(mimetype))
+            {
+                var proc = new ffmpeg(req.file.path).thumbnail(
+                {
+                    count: 1,
+                    timemarks: ['0'],
+                    folder: tmp_thumb_dir,
+                    filename: 'thumb_'+uuid,
+                    size: '256x?'
+                })
+                .on('end', function(stdout, stderr) {
+                    fs.createReadStream(tmp_thumb_dir + '/thumb_'+uuid+'.png')
+                        .pipe(thumbWriteStream);
+                    thumbWriteStream.on('close', function(file)
+                    {
+                        //Store meta information in document
+                        fileModel.save(function(err){});
+                        res.status(201).json({'error':0, 'reply':'Replication succeeded: File stored successfully.'});
+                        //Delete both tempfiles (thumb and original file)
+                        fs.unlinkSync(tmp_thumb_dir + '/thumb_'+uuid+'.png');
+                        fs.unlinkSync(req.file.path);
+                    });
+                });
+            }
+            else if(contact_types.includes(mimetype))
+            {
+                fs.createReadStream('./icons/ic_contact.png').pipe(thumbWriteStream);
+                thumbWriteStream.on('close', function(file)
+                {
+                    //Store meta information in document
+                    fileModel.save(function(err){});
+                    res.status(201).json({'error':0, 'reply':'Replication succeeded: File stored successfully.'});
+                    //Delete original file
+                    fs.unlinkSync(req.file.path);
+                });
+            }
+            else if(audio_types.includes(mimetype))
+            {
+                fs.createReadStream('./icons/ic_audio.png').pipe(thumbWriteStream);
+                thumbWriteStream.on('close', function(file)
+                {
+                    //Store meta information in document
+                    fileModel.save(function(err){});
+                    res.status(201).json({'error':0, 'reply':'Replication succeeded: File stored successfully.'});
+                    //Delete original file
+                    fs.unlinkSync(req.file.path);
+                });
+            }
+            else
+            {
+                fs.createReadStream('./icons/ic_unknown_file.png').pipe(thumbWriteStream);
+                thumbWriteStream.on('close', function(file)
+                {
+                    //Store meta information in document
+                    fileModel.save(function(err){});
+                    res.status(201).json({'error':0, 'reply':'Replication succeeded: File stored successfully.'});
+                    //Delete original file
+                    fs.unlinkSync(req.file.path);
+                });
+            }
+
+        });
+
+
+        // TODO: after successful replication, update mapping on master node
+
+        
+    });
+
 
     app.post('/fileAccess/insert', function(req, res)
     {
@@ -746,7 +910,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                 // calculate new MeanAccessLocations after all FileAccess objs have been inserted
                 if (counter == 0) {
-                    calculateMeanAccessLocations( fileGeohashSet /*, fullSet */);
+                    calculateMeanAccessLocations( fileGeohashSet );
                 }
 
                 // if (err) {
@@ -828,7 +992,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                             var fal = new m.FileAccessLocation({
                                 "file": file,
                                 "geohash": avgGeohash,
-                                "counter": result.length
+                                "counter": result.length,
+                                "replicated": false
                             });
 
                             fal.save(function(err) { 
@@ -868,6 +1033,159 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
     }
 
+    // cron-job running regularly to identify which files to replicate
+    cron.schedule('* * * * *', function() {
+        console.log("[" + getDateTime() + "] Cron-job running!")
+
+        // get all FileAccessLocations that are above counter threshold and have not yet been replicated
+        m.FileAccessLocation.find({counter: {$gt: REPLICATION_COUNTER_THRESHOLD}, replicated: false}, function(err, fileAccessLocations) {
+
+            if (err) {
+                console.log("[" + getDateTime() + "] Error retrieving FileAccessLocations from MongoDB:");
+                console.log(err);
+                return;
+            }
+
+            // else: start replicating
+            console.log("No. of found FileAccessLocations to replicate: " + fileAccessLocations.length);
+
+            // get nodes from MasterNode
+            var nodesArray = [];
+            request(MASTER_NODE_URL + ":" + MASTER_NODE_PORT + "/" + MASTER_API_VERSION + "/nodes", function (error, response, body) {
+                if (error) {
+                    console.log("[" + getDateTime() + "] Error retrieving nodes from MasterNode:");
+                    console.log(error);
+                    return;
+                }
+                nodesArray = JSON.parse(body).data.nodes;
+
+                // console.log("Nodes from master:");
+                // console.log(nodesArray);
+    
+                fileAccessLocations.forEach(function(fal) {
+                    // file to replicate:
+                    var fileUuid = fal.file;
+    
+                    // spatial destination:
+                    var dest = fal.geohash;
+                    var latlong = nGeohash.decode(dest);
+    
+                    console.log("file: " + fileUuid + "; destination: " + latlong.latitude + ", " + latlong.longitude);
+                    
+                    // for current fileAccessLocation, find node that is spatially nearest to fal.latlong
+                    var minDistance = Number.MAX_VALUE;
+                    var targetNode = null;
+                    nodesArray.forEach( function(node) {
+                        var dist = distanceBetween(node.location, [latlong.latitude, latlong.longitude]);
+
+                        if (dist < minDistance) {
+                            minDistance = dist;
+                            targetNode = node;
+                        }
+                    });
+
+                    if (!targetNode) {
+                        return;
+                    }
+
+                    // TODO: check if targetNode is this node --> if so: abort
+                    
+                    // send file to targetNode
+                    gfs.exist({filename: fileUuid}, function(error, found) {
+
+                        if (error || !found) {
+                            console.log("[" + getDateTime() + "] File not found on this node!");
+                            return;
+                        }
+
+                        m.File.findOne({uuid: fileUuid}, function(error, file){
+                            // send file to specified node:
+                            if (error) {
+                                console.log("[" + getDateTime() + "] Could not find file " + fileUuid + " in MongoDB!");
+                                return;
+                            }
+
+                            // var fd = new FormData();
+                            // fd.append('filedata', gfs.createReadStream({filename: fileUuid}));
+                            // fd.append('uuid', fileUuid);
+
+                            // WORKAROUND: make download to temporary directory to create working filestreams
+                            var fsstreamwrite = fs.createWriteStream("./tmp_replication/" + fileUuid);
+                            var readstream = gfs.createReadStream( {filename: fileUuid} );
+                            readstream.pipe(fsstreamwrite);
+                            readstream.on("close", function () {
+                                console.log("File Read successfully from database");
+
+                                // TODO: replace port number with ":" + targetNode.port
+                                var options = {
+                                    url: targetNode.url + ":" + targetNode.port + "/replication/data",
+                                    method: "POST",
+                                    enctype: "multipart/form-data",
+                                    formData: {
+                                        "filedata": fs.createReadStream('./tmp_replication/' + fileUuid),
+                                        "metadata": JSON.stringify(file)
+                                    }
+                                }
+                                // 
+
+                                // var req = request.post(targetNode.url + ":" + targetNode.port + "/replication/data", function(error, response, body){
+                                request(options, function(error, response, body) {
+                                    if (error) {
+                                        console.log("[" + getDateTime() + "] Error replicating file:");
+                                        console.log(error);
+                                        return;
+                                    }
+
+                                    console.log('statusCode: ', response && response.statusCode); 
+                                    console.log('body: ', body);
+
+                                    // TODO: delete temporary file
+
+                                    // TODO: if status == 200, set fal.replicated = true
+                                });
+
+                            });
+
+                        });
+
+                    });
+                    
+                });
+
+            });
+
+        });
+
+    })
+
+    // distance between two sets of coordinates, according to haversine formula:
+    function degreesToRadians(degrees) {
+        return degrees * Math.PI / 180;
+    }
+      
+    function distanceBetween(loc1, loc2) {
+        var earthRadiusKm = 6371;
+        
+        var lat1 = loc1[0];
+        var lon1 = loc1[1];
+        var lat2 = loc2[0];
+        var lon2 = loc2[1];
+
+        var dLat = degreesToRadians(lat2-lat1);
+        var dLon = degreesToRadians(lon2-lon1);
+        
+        lat1 = degreesToRadians(lat1);
+        lat2 = degreesToRadians(lat2);
+        
+        var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.sin(dLon/2) * Math.sin(dLon/2) * Math.cos(lat1) * Math.cos(lat2); 
+        var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+        return earthRadiusKm * c;
+    }
+
+    //*************************//
+    //*** REPLICATION ABOVE ***//
+    //*************************//
 
     /**
      * Tries to parse the given json string into a ContextSchema

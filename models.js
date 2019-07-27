@@ -85,11 +85,10 @@ module.exports = function(mongoose) {
     {
         geohash: String,
         counter: Number,
-        file: String
-
-
+        file: String,
+        replicated: Boolean
     });
-    
+
     var models = {
         Location : mongoose.model('Location', LocationSchema),
         Place : mongoose.model('Place', PlaceSchema),
