@@ -713,22 +713,13 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
         
         console.log('['+getDateTime()+'] Replication request received');
 
-
-        // TODO
-        console.log("--------- RECEIVED BODY ----------")
-        console.log(req.body)
-
         var original = req.file.originalname;
         var uuid = req.file.originalname.replace(/\.[^/.]+$/, "");
-
-        console.log("Original name: " + original);
-        console.log("Regex replaced name: " + uuid);
-        console.log("Metadata: " + req.body.metadata);
 
         var metadata = JSON.parse(req.body.metadata);
         delete metadata._id;
         delete metadata.__v;
-        console.log("File JSON: " + metadata);
+
         var fileModel = new m.File(metadata);
 
         // check if file is already present:
@@ -736,7 +727,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
             if (error) {
                 console.log('['+getDateTime()+'] File lookup failed!');
 
-                // TODO: send error status code
                 res.status(500).json({"error": 1, "error_msg": "Failed to replicate file!"})
                 return;
             }
@@ -747,13 +737,9 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                 return;
             }
 
-            // // save file and metadata to DB 
-            // fs.createReadStream(req.file.path).pipe(gfs.createWriteStream({
-            //     filename: uuid
-            // }));
-
             var mimetype = metadata.mimetype;
             var extension = metadata.extension;
+
             // COPY FROM app.post('/file/data', ...) :
             //First, write to GridFS, then create thumbnail,
             //then save metadata in database
@@ -789,6 +775,9 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                         //Delete both tempfiles (thumb and original file)
                         fs.unlinkSync(tmp_thumb_dir + '/' + createdThumbName);
                         fs.unlinkSync(req.file.path+"."+extension);
+
+                        // inform master node about new file on this node
+                        updateMappingOnMasterNode(fileModel);
                     });
                 });
             }
@@ -813,6 +802,9 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                         //Delete both tempfiles (thumb and original file)
                         fs.unlinkSync(tmp_thumb_dir + '/thumb_'+uuid+'.png');
                         fs.unlinkSync(req.file.path);
+
+                        // inform master node about new file on this node
+                        updateMappingOnMasterNode(fileModel);
                     });
                 });
             }
@@ -826,6 +818,9 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     res.status(201).json({'error':0, 'reply':'Replication succeeded: File stored successfully.'});
                     //Delete original file
                     fs.unlinkSync(req.file.path);
+
+                    // inform master node about new file on this node
+                    updateMappingOnMasterNode(fileModel);
                 });
             }
             else if(audio_types.includes(mimetype))
@@ -838,6 +833,9 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     res.status(201).json({'error':0, 'reply':'Replication succeeded: File stored successfully.'});
                     //Delete original file
                     fs.unlinkSync(req.file.path);
+
+                    // inform master node about new file on this node
+                    updateMappingOnMasterNode(fileModel);
                 });
             }
             else
@@ -850,15 +848,14 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     res.status(201).json({'error':0, 'reply':'Replication succeeded: File stored successfully.'});
                     //Delete original file
                     fs.unlinkSync(req.file.path);
+
+                    // inform master node about new file on this node
+                    updateMappingOnMasterNode(fileModel);
                 });
             }
 
-        });
+        });      
 
-
-        // TODO: after successful replication, update mapping on master node
-
-        
     });
 
 
@@ -1022,8 +1019,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                     })
 
-
-
                 } else {
                     console.log("[" + getDateTime() + "] No FileAccess entries in MongoDB!")  // should never be the case
                 }
@@ -1035,7 +1030,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
     // cron-job running regularly to identify which files to replicate
     cron.schedule('* * * * *', function() {
-        console.log("[" + getDateTime() + "] Cron-job running!")
+        console.log("[" + getDateTime() + "] Replication cron job running!")
 
         // get all FileAccessLocations that are above counter threshold and have not yet been replicated
         m.FileAccessLocation.find({counter: {$gt: REPLICATION_COUNTER_THRESHOLD}, replicated: false}, function(err, fileAccessLocations) {
@@ -1047,7 +1042,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
             }
 
             // else: start replicating
-            console.log("No. of found FileAccessLocations to replicate: " + fileAccessLocations.length);
 
             // get nodes from MasterNode
             var nodesArray = [];
@@ -1058,9 +1052,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     return;
                 }
                 nodesArray = JSON.parse(body).data.nodes;
-
-                // console.log("Nodes from master:");
-                // console.log(nodesArray);
     
                 fileAccessLocations.forEach(function(fal) {
                     // file to replicate:
@@ -1069,8 +1060,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     // spatial destination:
                     var dest = fal.geohash;
                     var latlong = nGeohash.decode(dest);
-    
-                    console.log("file: " + fileUuid + "; destination: " + latlong.latitude + ", " + latlong.longitude);
                     
                     // for current fileAccessLocation, find node that is spatially nearest to fal.latlong
                     var minDistance = Number.MAX_VALUE;
@@ -1099,15 +1088,11 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                         }
 
                         m.File.findOne({uuid: fileUuid}, function(error, file){
-                            // send file to specified node:
+                            // send file to specified node
                             if (error) {
                                 console.log("[" + getDateTime() + "] Could not find file " + fileUuid + " in MongoDB!");
                                 return;
                             }
-
-                            // var fd = new FormData();
-                            // fd.append('filedata', gfs.createReadStream({filename: fileUuid}));
-                            // fd.append('uuid', fileUuid);
 
                             // WORKAROUND: make download to temporary directory to create working filestreams
                             var fsstreamwrite = fs.createWriteStream("./tmp_replication/" + fileUuid);
@@ -1116,7 +1101,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                             readstream.on("close", function () {
                                 console.log("File Read successfully from database");
 
-                                // TODO: replace port number with ":" + targetNode.port
                                 var options = {
                                     url: targetNode.url + ":" + targetNode.port + "/replication/data",
                                     method: "POST",
@@ -1126,9 +1110,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                         "metadata": JSON.stringify(file)
                                     }
                                 }
-                                // 
-
-                                // var req = request.post(targetNode.url + ":" + targetNode.port + "/replication/data", function(error, response, body){
+                                
                                 request(options, function(error, response, body) {
                                     if (error) {
                                         console.log("[" + getDateTime() + "] Error replicating file:");
@@ -1136,12 +1118,19 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                         return;
                                     }
 
-                                    console.log('statusCode: ', response && response.statusCode); 
-                                    console.log('body: ', body);
+                                    // delete temporary file
+                                    fs.unlinkSync('./tmp_replication/' + fileUuid)
 
-                                    // TODO: delete temporary file
+                                    // update FileAccessLocation to replicated = true
+                                    m.FileAccessLocation.updateOne({"_id": fal._id}, {$set: {"replicated": true} }, function(err){
+                                        if (err) {
+                                            console.log("[" + getDateTime() + "] Error updating FileAccessLocation after Replication:");
+                                            console.log(err);
+                                            return;
+                                        }
+                                        
+                                    });                                    
 
-                                    // TODO: if status == 200, set fal.replicated = true
                                 });
 
                             });
@@ -1181,6 +1170,33 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                 Math.sin(dLon/2) * Math.sin(dLon/2) * Math.cos(lat1) * Math.cos(lat2); 
         var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
         return earthRadiusKm * c;
+    }
+
+    function updateMappingOnMasterNode(replicatedFile) {
+
+        var nodeMapping = {
+            device_id: replicatedFile.phoneID,
+            file_id: replicatedFile.uuid,
+            node_id: NODE_UUID
+        }
+        var payload = {
+            url: MASTER_NODE_URL + ":" + MASTER_NODE_PORT + "/" + MASTER_API_VERSION + "/file_node_mapping",
+            method: "POST",
+            json: nodeMapping
+        }
+
+        request.post(payload, function(err, res, body){
+            if(err) {
+                console.log("["+getDateTime()+"] Cannot inform master node about file mapping!")
+                return;
+            }
+
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+                console.log("["+getDateTime()+"] Updated mapping on master node");
+            }
+            
+        });
+
     }
 
     //*************************//
