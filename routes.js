@@ -12,7 +12,7 @@ var nGeohash = require('ngeohash');
 const GEOHASH_COMPARE_PRECISION = 5;
 const GEOHASH_PRECISION = 9;    // highest possible
 
-const REPLICATION_COUNTER_THRESHOLD = 2;
+const REPLICATION_COUNTER_THRESHOLD = 5;
 
 var cron = require('node-cron');
 var request = require('request');
@@ -38,6 +38,12 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
     var Grid = require('gridfs-stream');
     Grid.mongo = mongoose.mongo;
     var gfs = Grid(dbConn.db);
+
+    // create tmp_replication folder if not exists
+    if (!fs.existsSync("./tmp_replication")){
+        fs.mkdirSync("./tmp_replication");
+        console.log("["+getDateTime()+"] ./tmp_replication created")
+    }
 
     //******************//
     //*** API routes ***//
@@ -1052,7 +1058,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     return;
                 }
                 nodesArray = JSON.parse(body).data.nodes;
-    
+                
                 fileAccessLocations.forEach(function(fal) {
                     // file to replicate:
                     var fileUuid = fal.file;
@@ -1083,7 +1089,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     gfs.exist({filename: fileUuid}, function(error, found) {
 
                         if (error || !found) {
-                            console.log("[" + getDateTime() + "] File not found on this node!");
+                            console.log("[" + getDateTime() + "] File not found on this node: " + fileUuid);
                             return;
                         }
 
@@ -1094,10 +1100,20 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                 return;
                             }
 
-                            // WORKAROUND: make download to temporary directory to create working filestreams
-                            var fsstreamwrite = fs.createWriteStream("./tmp_replication/" + fileUuid);
-                            var readstream = gfs.createReadStream( {filename: fileUuid} );
-                            readstream.pipe(fsstreamwrite);
+                            // WORKAROUND: write file to temporary directory to create working filestreams
+                            try {
+                                var fsstreamwrite = fs.createWriteStream("./tmp_replication/" + fileUuid);
+                                var readstream = gfs.createReadStream( {filename: fileUuid} );
+                                readstream.pipe(fsstreamwrite);
+                            } catch (err) {
+                                console.log("[" + getDateTime() + "] Error directing streams for file " + fileUuid);
+                            }
+                            
+                            // readstream.on("error", function() { 
+                            //     console.log("[" + getDateTime() + "] Error on readStrema for file " + fileUuid);
+                            //     return;
+                            //  });
+
                             readstream.on("close", function () {
                                 console.log("File Read successfully from database");
 
@@ -1118,8 +1134,10 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                         return;
                                     }
 
-                                    // delete temporary file
-                                    fs.unlinkSync('./tmp_replication/' + fileUuid)
+                                     // delete temporary file
+                                    fs.unlink('./tmp_replication/' + fileUuid, function(err){
+                                        // file not present anymore. Continue...
+                                    });
 
                                     // update FileAccessLocation to replicated = true
                                     m.FileAccessLocation.updateOne({"_id": fal._id}, {$set: {"replicated": true} }, function(err){
@@ -1137,7 +1155,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                         });
 
-                    });
+                    }); 
                     
                 });
 
