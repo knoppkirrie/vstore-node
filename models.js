@@ -76,8 +76,7 @@ module.exports = function(mongoose) {
         uuid: String,
         file: String,
         geohash: String,
-        timeOfWeek: String,
-        totalMinutes: Number,
+        timestamp: Number,
         deviceId: String
     });
 

@@ -887,8 +887,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
             var uuid = array[i].uuid;
             var file = array[i].file;
             var geohash = array[i].geohash;
-            var timeOfWeek = array[i].timeOfWeek;
-            var totalMinutes = array[i].totalMinutes;
+            var timestamp = array[i].timestamp;
             var deviceId = array[i].deviceId;
 
             var fileHashPair = file + '###' + geohash.substring(0, GEOHASH_COMPARE_PRECISION);   // separate by '###' to bypass object equality check in Set
@@ -900,8 +899,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                 'uuid' : uuid,
                 'file': file,
                 'geohash': geohash,
-                'timeOfWeek': timeOfWeek,
-                'totalMinutes': totalMinutes,
+                'timestamp': timestamp,
                 'deviceId': deviceId
             });
 
@@ -950,7 +948,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
             var file = pair[0];
             var geohash = pair[1];
 
-            var query = {file: file, geohash: new RegExp('^' + geohash)};   // regex is similar to 'geohash%' in SQL
+            var query = {file: file, geohash: new RegExp('^' + geohash)};   // regex is similar to '<geohash>%' in SQL
 
             m.FileAccess.find(query, function(err, result) 
             {
@@ -1117,15 +1115,22 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                             readstream.on("close", function () {
                                 console.log("File Read successfully from database");
 
-                                var options = {
-                                    url: targetNode.url + ":" + targetNode.port + "/replication/data",
-                                    method: "POST",
-                                    enctype: "multipart/form-data",
-                                    formData: {
-                                        "filedata": fs.createReadStream('./tmp_replication/' + fileUuid),
-                                        "metadata": JSON.stringify(file)
+                                try {
+                                    var options = {
+                                        url: targetNode.url + ":" + targetNode.port + "/replication/data",
+                                        method: "POST",
+                                        enctype: "multipart/form-data",
+                                        formData: {
+                                            "filedata": fs.createReadStream('./tmp_replication/' + fileUuid),
+                                            "metadata": JSON.stringify(file)
+                                        }
                                     }
+                                } catch (err) {
+                                    console.log("[" + getDateTime() + "] Error creating readstream for file " + fileUuid);
+                                    console.log("               --> Abort.");
+                                    return;
                                 }
+                                
                                 
                                 request(options, function(error, response, body) {
                                     if (error) {
@@ -1156,7 +1161,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                         });
 
                     }); 
-                    
+             
                 });
 
             });
