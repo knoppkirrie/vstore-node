@@ -4,13 +4,15 @@ var tmp_thumb_dir = './tmp_thumb';
 const md5File = require('md5-file');
 
 // ----- REPLICATION vars and consts below -----
+var tmp_replication_dir = "./tmp_replication";
+
 var MASTER_NODE_URL = "http://localhost";
 var MASTER_NODE_PORT = 50000;
 var MASTER_API_VERSION = "v1";
 
 var nGeohash = require('ngeohash');
 const GEOHASH_COMPARE_PRECISION = 5;
-const GEOHASH_PRECISION = 9;    // highest possible
+const GEOHASH_PRECISION = 9;    // highest possible: 9
 
 const REPLICATION_COUNTER_THRESHOLD = 5;
 
@@ -20,6 +22,11 @@ var request = require('request');
 
 if(!fs.existsSync(tmp_thumb_dir)) {
     fs.mkdirSync(tmp_thumb_dir);
+}
+
+// create tmp_replication folder if not exists
+if (!fs.existsSync(tmp_replication_dir)){
+    fs.mkdirSync(tmp_replication_dir);
 }
 
 var image_types = ["image/jpeg", "image/png", "image/gif", "image/bmp"];
@@ -38,12 +45,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
     var Grid = require('gridfs-stream');
     Grid.mongo = mongoose.mongo;
     var gfs = Grid(dbConn.db);
-
-    // create tmp_replication folder if not exists
-    if (!fs.existsSync("./tmp_replication")){
-        fs.mkdirSync("./tmp_replication");
-        console.log("["+getDateTime()+"] ./tmp_replication created")
-    }
 
     //******************//
     //*** API routes ***//
@@ -890,6 +891,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
             var timestamp = array[i].timestamp;
             var deviceId = array[i].deviceId;
 
+            // combine fileUuid and geohash substring, according to GEOHASH_COMPARE_PRECISION 
             var fileHashPair = file + '###' + geohash.substring(0, GEOHASH_COMPARE_PRECISION);   // separate by '###' to bypass object equality check in Set
 
             fileGeohashSet.add(fileHashPair); 
@@ -936,9 +938,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
      */
     function calculateMeanAccessLocations( keySet ) {
         
-        // console.log("Accessed files and Geohashes:");
-        // console.log(keySet);
-
         // for all file/geohash pairs in accessedFiles:
         // - get existing FileAccessLocations with pairs from keySet from node-DB
 
@@ -964,8 +963,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                 }
 
                 if (result.length > 0) {
-                    // console.log("No. of retrieved FileAccess objs: " + result.length)
-
                     // calculate center point for all positions
                     var lat = 0;
                     var lng = 0;
@@ -980,8 +977,6 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                     var avgGeohash = nGeohash.encode(avgLat, avgLng, GEOHASH_PRECISION);
                     
-                    // console.log("Avg values: " + avgLat + ", " + avgLng + "--> " + avgGeohash)
-
                     // update FileAccessLocation if already present,
                     // insert new otherwise
                     m.FileAccessLocation.findOne(query, function(err, res) {
@@ -1033,8 +1028,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
     }
 
     // cron-job running regularly to identify which files to replicate
-    cron.schedule('* * * * *', function() {
-        console.log("[" + getDateTime() + "] Replication cron job running!")
+    cron.schedule('* * * * * *', function() {
+        // console.log("[" + getDateTime() + "] Replication cron job running!")
 
         // get all FileAccessLocations that are above counter threshold and have not yet been replicated
         m.FileAccessLocation.find({counter: {$gt: REPLICATION_COUNTER_THRESHOLD}, replicated: false}, function(err, fileAccessLocations) {
@@ -1100,7 +1095,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                             // WORKAROUND: write file to temporary directory to create working filestreams
                             try {
-                                var fsstreamwrite = fs.createWriteStream("./tmp_replication/" + fileUuid);
+                                var fsstreamwrite = fs.createWriteStream(tmp_replication_dir + "/" + fileUuid);
                                 var readstream = gfs.createReadStream( {filename: fileUuid} );
                                 readstream.pipe(fsstreamwrite);
                             } catch (err) {
@@ -1121,7 +1116,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                         method: "POST",
                                         enctype: "multipart/form-data",
                                         formData: {
-                                            "filedata": fs.createReadStream('./tmp_replication/' + fileUuid),
+                                            "filedata": fs.createReadStream(tmp_replication_dir + "/" + fileUuid),
                                             "metadata": JSON.stringify(file)
                                         }
                                     }
@@ -1140,7 +1135,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                     }
 
                                      // delete temporary file
-                                    fs.unlink('./tmp_replication/' + fileUuid, function(err){
+                                    fs.unlink(tmp_replication_dir + "/" + fileUuid, function(err){
                                         // file not present anymore. Continue...
                                     });
 
