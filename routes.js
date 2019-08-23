@@ -1014,21 +1014,21 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                             }
 
                             console.log("[" + getDateTime() + "] Updated FileAccessLocation in MongoDB");
-                        } );
+                        });
 
-                    })
+                    });
 
                 } else {
                     console.log("[" + getDateTime() + "] No FileAccess entries in MongoDB!")  // should never be the case
                 }
-            })
+            });
 
         });
 
     }
 
     // cron-job running regularly to identify which files to replicate
-    cron.schedule('* * * * * *', function() {
+    cron.schedule('*/2 * * * * *', function() {
         // console.log("[" + getDateTime() + "] Replication cron job running!")
 
         // get all FileAccessLocations that are above counter threshold and have not yet been replicated
@@ -1051,6 +1051,9 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     return;
                 }
                 nodesArray = JSON.parse(body).data.nodes;
+
+                var counter = 0;
+                var fileNodeSet = new Set();
                 
                 fileAccessLocations.forEach(function(fal) {
                     // file to replicate:
@@ -1078,84 +1081,104 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                     // TODO: check if targetNode is this node --> if so: abort
                     
-                    // send file to targetNode
-                    gfs.exist({filename: fileUuid}, function(error, found) {
+                    // TODO: reduce number of replication requests of same file to same node to 1
+                    var fileNodePair = fileUuid + "###" + targetNode.url + ":" + targetNode.port;
+                    fileNodeSet.add(fileNodePair);
+                    counter++;
 
-                        if (error || !found) {
-                            console.log("[" + getDateTime() + "] File not found on this node: " + fileUuid);
-                            return;
-                        }
+                    if (counter == fileAccessLocations.length) {
+                        // all file-node pairs should have been checked now and duplicated removed
+                        // var fileNodes = fileNodeSet.toArray();  // transform Set to Array to loop through it
+                        var fileNodes = Array.from(fileNodeSet);
+                        for (var i = 0; i < fileNodes.length; i++) {
+                            var pair = fileNodes[i].split("###");
+                            var fileUuid = pair[0];
+                            var nodeUrlPort = pair[1];
+                            // var nodeInfo = pair[1].split(":");
+                            // var nodeUrl = nodeInfo[0];
+                            // var nodePort = nodeInfo[1];
 
-                        m.File.findOne({uuid: fileUuid}, function(error, file){
-                            // send file to specified node
-                            if (error) {
-                                console.log("[" + getDateTime() + "] Could not find file " + fileUuid + " in MongoDB!");
-                                return;
-                            }
+                            // send file to targetNode
+                            gfs.exist({filename: fileUuid}, function(error, found) {
 
-                            // WORKAROUND: write file to temporary directory to create working filestreams
-                            try {
-                                var fsstreamwrite = fs.createWriteStream(tmp_replication_dir + "/" + fileUuid);
-                                var readstream = gfs.createReadStream( {filename: fileUuid} );
-                                readstream.pipe(fsstreamwrite);
-                            } catch (err) {
-                                console.log("[" + getDateTime() + "] Error directing streams for file " + fileUuid);
-                            }
-                            
-                            // readstream.on("error", function() { 
-                            //     console.log("[" + getDateTime() + "] Error on readStrema for file " + fileUuid);
-                            //     return;
-                            //  });
-
-                            readstream.on("close", function () {
-                                console.log("File Read successfully from database");
-
-                                try {
-                                    var options = {
-                                        url: targetNode.url + ":" + targetNode.port + "/replication/data",
-                                        method: "POST",
-                                        enctype: "multipart/form-data",
-                                        formData: {
-                                            "filedata": fs.createReadStream(tmp_replication_dir + "/" + fileUuid),
-                                            "metadata": JSON.stringify(file)
-                                        }
-                                    }
-                                } catch (err) {
-                                    console.log("[" + getDateTime() + "] Error creating readstream for file " + fileUuid);
-                                    console.log("               --> Abort.");
+                                if (error || !found) {
+                                    console.log("[" + getDateTime() + "] File not found on this node: " + fileUuid);
                                     return;
                                 }
-                                
-                                
-                                request(options, function(error, response, body) {
+
+                                m.File.findOne({uuid: fileUuid}, function(error, file){
+                                    // send file to specified node
                                     if (error) {
-                                        console.log("[" + getDateTime() + "] Error replicating file:");
-                                        console.log(error);
+                                        console.log("[" + getDateTime() + "] Could not find file " + fileUuid + " in MongoDB!");
                                         return;
                                     }
 
-                                     // delete temporary file
-                                    fs.unlink(tmp_replication_dir + "/" + fileUuid, function(err){
-                                        // file not present anymore. Continue...
-                                    });
+                                    // write file to tmp directory to create working filestreams
+                                    try {
+                                        var fsstreamwrite = fs.createWriteStream(tmp_replication_dir + "/" + fileUuid);
+                                        var readstream = gfs.createReadStream( {filename: fileUuid} );
+                                        readstream.pipe(fsstreamwrite);
+                                    } catch (err) {
+                                        console.log("[" + getDateTime() + "] Error directing streams for file " + fileUuid);
+                                    }
+                                    
+                                    // readstream.on("error", function() { 
+                                    //     console.log("[" + getDateTime() + "] Error on readStrema for file " + fileUuid);
+                                    //     return;
+                                    //  });
 
-                                    // update FileAccessLocation to replicated = true
-                                    m.FileAccessLocation.updateOne({"_id": fal._id}, {$set: {"replicated": true} }, function(err){
-                                        if (err) {
-                                            console.log("[" + getDateTime() + "] Error updating FileAccessLocation after Replication:");
-                                            console.log(err);
+                                    readstream.on("close", function () {
+                                        console.log("File Read successfully from database");
+
+                                        try {
+                                            var options = {
+                                                url: nodeUrlPort + "/replication/data",
+                                                method: "POST",
+                                                enctype: "multipart/form-data",
+                                                formData: {
+                                                    "filedata": fs.createReadStream(tmp_replication_dir + "/" + fileUuid),
+                                                    "metadata": JSON.stringify(file)
+                                                }
+                                            }
+                                        } catch (err) {
+                                            console.log("[" + getDateTime() + "] Error creating readstream for file " + fileUuid);
+                                            console.log("               --> Abort.");
                                             return;
                                         }
                                         
-                                    });                                    
+                                        
+                                        request(options, function(error, response, body) {
+                                            if (error) {
+                                                console.log("[" + getDateTime() + "] Error replicating file:");
+                                                console.log(error);
+                                                return;
+                                            }
+
+                                            // delete temporary file
+                                            fs.unlink(tmp_replication_dir + "/" + fileUuid, function(err){
+                                                // file not present anymore. Continue...
+                                            });
+
+                                            // update FileAccessLocation to replicated = true
+                                            m.FileAccessLocation.updateOne({"_id": fal._id}, {$set: {"replicated": true} }, function(err){
+                                                if (err) {
+                                                    console.log("[" + getDateTime() + "] Error updating FileAccessLocation after Replication:");
+                                                    console.log(err);
+                                                    return;
+                                                }
+                                                
+                                            });                                    
+
+                                        });
+
+                                    });
 
                                 });
 
-                            });
-
-                        });
-
-                    }); 
+                            }); 
+                    
+                        }
+                    }
              
                 });
 
