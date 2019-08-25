@@ -88,6 +88,15 @@ module.exports = function(mongoose) {
         replicated: Boolean
     });
 
+    var ReplicatedFileSchema = Schema(
+    {
+        _id: String,
+        lastAccess: Number,
+        geohash_prefix: [String],
+        src_address: String,
+        src_port: Number    
+    });
+
     var models = {
         Location : mongoose.model('Location', LocationSchema),
         Place : mongoose.model('Place', PlaceSchema),
@@ -97,7 +106,8 @@ module.exports = function(mongoose) {
         Context : mongoose.model('Context', ContextSchema),
         File : mongoose.model('File', FileSchema),
         FileAccess: mongoose.model('FileAccess', FileAccessSchema),
-        FileAccessLocation: mongoose.model('FileAccessLocation', FileAccessLocationSchema)
+        FileAccessLocation: mongoose.model('FileAccessLocation', FileAccessLocationSchema),
+        ReplicatedFile: mongoose.model('ReplicatedFile', ReplicatedFileSchema)
     };
     return models;
 }

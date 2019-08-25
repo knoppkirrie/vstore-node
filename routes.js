@@ -16,6 +16,8 @@ const GEOHASH_PRECISION = 9;    // highest possible: 9
 
 const REPLICATION_COUNTER_THRESHOLD = 5;
 
+const REPLICATION_RETAINING_THRESHOLD = 7;  // in days
+
 var cron = require('node-cron');
 var request = require('request');
 // ----- REPLICATION vars and consts above -----
@@ -39,7 +41,7 @@ function getDateTime() {
     return (new Date()).toJSON().slice(0, 19).replace(/[-T]/g, ':');
 }
 
-module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, ffmpeg)
+module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, NODE_PORT, ffmpeg)
 {
     var m = require('./models.js')(mongoose);
     var Grid = require('gridfs-stream');
@@ -475,6 +477,10 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     return;
                 });
                 readstream.pipe(res);
+
+                // if file is a replicated copy, update lastAccess timestamp
+                m.ReplicatedFile.findByIdAndUpdate(fUUID, {"lastAccess": Date.now()}, function(err, result) { });
+
             });
         });
     });
@@ -861,6 +867,17 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                 });
             }
 
+            // make note that file is a replicated one
+            var replicatedFileData = {
+                _id: fileModel.uuid,
+                lastAccess: Date.now(),
+                geohash_prefix: req.body.geohash_prefix,
+                src_address: req.connection.remoteAddress,
+                src_port: req.body.src_port
+            };
+            var replicatedFile = new m.ReplicatedFile(replicatedFileData);
+            replicatedFile.save(function(err){});
+
         });      
 
     });
@@ -932,6 +949,36 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
     });
 
+
+    /**
+     * Is called when a remote node decides to delete a replicated file to free storage.
+     * Resets the counter and isReplicated flag for the FileAccessLocation on this node.
+     */
+    app.post('/replication/reset', function(req, res) {
+
+        if (!req.body.file || !req.body.geohash_prefix) {
+            res.status = 400;
+            return;
+        }
+
+        // reset all FileAccessLocations whose replication node was the remote one
+        for (var i = 0; i < req.body.geohash_prefix.length; i++) {
+
+            m.FileAccessLocation.updateMany({file: req.body.file, geohash: new RegExp('^' + req.body.geohash_prefix[i])}, {$set: {counter: 0, replicated: false}}, function(err) {
+                if (err) {
+                    console.log("["+getDateTime()+"] Error resetting FileAccessLocations in MongoDB.");
+                    res.status = 500;
+                    return;
+                }
+    
+                res.status = 200;
+                return;
+            });
+
+        }
+        
+    });
+
     /**
      * Calculates new center points for spatially close FileAccess entries
      * @param {*} keySet Set holding "<filename>###<geohash>" Strings to retrieve similar FileAccess objects
@@ -970,7 +1017,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                         let hash = nGeohash.decode(fileAccess.geohash);
                         lat += hash.latitude;
                         lng += hash.longitude;
-                    })
+                    });
 
                     var avgLat = lat / result.length;
                     var avgLng = lng / result.length;
@@ -1028,7 +1075,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
     }
 
     // cron-job running regularly to identify which files to replicate
-    cron.schedule('*/2 * * * * *', function() {
+    cron.schedule('*/10 * * * * *', function() {
         // console.log("[" + getDateTime() + "] Replication cron job running!")
 
         // get all FileAccessLocations that are above counter threshold and have not yet been replicated
@@ -1054,6 +1101,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                 var counter = 0;
                 var fileNodeSet = new Set();
+                var fileLocationMap = {};
                 
                 fileAccessLocations.forEach(function(fal) {
                     // file to replicate:
@@ -1081,9 +1129,15 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
                     // TODO: check if targetNode is this node --> if so: abort
                     
-                    // TODO: reduce number of replication requests of same file to same node to 1
-                    var fileNodePair = fileUuid + "###" + targetNode.url + ":" + targetNode.port;
-                    fileNodeSet.add(fileNodePair);
+                    // reduce number of replication requests of same file to same node to 1
+                    var fileNodePair = fileUuid + "###" + targetNode.url + ":" + targetNode.port; // + "###" + fal.geohash.substring(0, GEOHASH_COMPARE_PRECISION);
+                    if (fileNodeSet.has(fileNodePair)) {
+                        fileLocationMap[fileNodePair].push(fal.geohash.substring(0, GEOHASH_COMPARE_PRECISION));
+                    } else {
+                        fileNodeSet.add(fileNodePair);
+                        fileLocationMap[fileNodePair] = [fal.geohash.substring(0, GEOHASH_COMPARE_PRECISION)];
+                    }
+                                        
                     counter++;
 
                     if (counter == fileAccessLocations.length) {
@@ -1091,12 +1145,12 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                         // var fileNodes = fileNodeSet.toArray();  // transform Set to Array to loop through it
                         var fileNodes = Array.from(fileNodeSet);
                         for (var i = 0; i < fileNodes.length; i++) {
-                            var pair = fileNodes[i].split("###");
-                            var fileUuid = pair[0];
-                            var nodeUrlPort = pair[1];
-                            // var nodeInfo = pair[1].split(":");
-                            // var nodeUrl = nodeInfo[0];
-                            // var nodePort = nodeInfo[1];
+                            var parts = fileNodes[i].split("###");
+                            var fileUuid = parts[0];
+                            var nodeUrlPort = parts[1];
+                            
+                            // submit geohash_prefixes to replication request
+                            var geohashPrefix = fileLocationMap[ fileNodes[i] ];
 
                             // send file to targetNode
                             gfs.exist({filename: fileUuid}, function(error, found) {
@@ -1128,7 +1182,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                     //  });
 
                                     readstream.on("close", function () {
-                                        console.log("File Read successfully from database");
+                                        // console.log("File Read successfully from database");
 
                                         try {
                                             var options = {
@@ -1137,7 +1191,9 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                                 enctype: "multipart/form-data",
                                                 formData: {
                                                     "filedata": fs.createReadStream(tmp_replication_dir + "/" + fileUuid),
-                                                    "metadata": JSON.stringify(file)
+                                                    "metadata": JSON.stringify(file),
+                                                    "src_port": NODE_PORT,
+                                                    "geohash_prefix": geohashPrefix 
                                                 }
                                             }
                                         } catch (err) {
@@ -1157,17 +1213,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                                             // delete temporary file
                                             fs.unlink(tmp_replication_dir + "/" + fileUuid, function(err){
                                                 // file not present anymore. Continue...
-                                            });
-
-                                            // update FileAccessLocation to replicated = true
-                                            m.FileAccessLocation.updateOne({"_id": fal._id}, {$set: {"replicated": true} }, function(err){
-                                                if (err) {
-                                                    console.log("[" + getDateTime() + "] Error updating FileAccessLocation after Replication:");
-                                                    console.log(err);
-                                                    return;
-                                                }
-                                                
-                                            });                                    
+                                            });                      
 
                                         });
 
@@ -1179,6 +1225,16 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
                     
                         }
                     }
+
+                    // update FileAccessLocation to replicated = true
+                    m.FileAccessLocation.updateOne({"_id": fal._id}, {$set: {"replicated": true} }, function(err){
+                        if (err) {
+                            console.log("[" + getDateTime() + "] Error updating FileAccessLocation after Replication:");
+                            console.log(err);
+                            return;
+                        }
+                        
+                    });
              
                 });
 
@@ -1186,7 +1242,87 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, f
 
         });
 
-    })
+    });
+
+
+    // cron-job sorting out replicated files that have not been accessed 
+    // for more than REPLICATION_RETAINING_THRESHOLD days
+    
+    cron.schedule("* * * * *", function() {
+    // app.get("/test_Remove", function(req, res) { //})
+
+        // transform retaining threshold into milliseconds, as this value is saved in the db
+        const retaining_ms = REPLICATION_RETAINING_THRESHOLD * 24 * 60 * 60 * 1000;
+
+        // get all replicated files that exceed the threshold
+        m.ReplicatedFile.find({"lastAccess": {$lt: Date.now() - retaining_ms}}, function(err, replications) {
+
+            if (err) {
+                console.log("[" + getDateTime() + "] Error retrieving outdated replications from DB:");
+                console.log(err);
+                return;
+            }
+
+            if (replications && replications.length > 0) {
+
+                replications.forEach( function(replicatedFile) {
+
+                    // delete file from MongoDB
+                    m.File.deleteMany({"uuid": replicatedFile._id}, function(err){ });
+
+                    // delete file and thumbnail from gridFS
+                    gfs.remove({"filename": replicatedFile._id}, function(err){ });
+                    gfs.remove({"filename": "thumb_" + replicatedFile._id}, function(err){ });
+
+                    // inform master node about deletion
+                    var removedNodeMapping = {
+                        file_id: replicatedFile._id,
+                        node_id: NODE_UUID
+                    }
+                    var payload = {
+                        url: MASTER_NODE_URL + ":" + MASTER_NODE_PORT + "/" + MASTER_API_VERSION + "/remove_node",
+                        method: "DELETE",
+                        json: removedNodeMapping
+                    }
+                    request.post(payload, function(err, res, body){
+                        if(err) {
+                            console.log("["+getDateTime()+"] Cannot inform master node about file mapping!");
+                            return;
+                        }
+            
+                        if (res.statusCode >= 200 && res.statusCode < 300) {
+                            console.log("["+getDateTime()+"] Updated mapping on master node");
+                        }
+                    });
+
+                    // inform source node to reset FileAccessLocations
+                    var resetData = {
+                        file: replicatedFile._id,
+                        geohash_prefix: replicatedFile.geohash_prefix
+                    }
+                    payload = {
+                        url: "http://[" + replicatedFile.src_address + "]:" + replicatedFile.src_port + "/replication/reset",
+                        method: "POST",
+                        json: resetData
+                    }
+
+                    request.post(payload, function(err, res, body) {
+                        if (err) {
+                            console.log("["+getDateTime()+"] Cannot inform source node about FAL reset!");
+                            return;
+                        }
+                        
+                    });
+
+                    // delete replication entry
+                    replicatedFile.remove();
+
+                });
+            }
+
+        });
+        
+    });
 
     // distance between two sets of coordinates, according to haversine formula:
     function degreesToRadians(degrees) {

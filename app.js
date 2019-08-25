@@ -58,7 +58,7 @@ UUID.findOne({configured: true}, function(err, obj) {
 
     // Require the API routes
     var routes = require('./routes.js')(app, upload, mongoose, dbConn,
-    NODE_UUID, NODE_TYPE, ffmpeg);
+    NODE_UUID, NODE_TYPE, NODE_PORT, ffmpeg);
 
 });
 
