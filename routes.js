@@ -1087,6 +1087,10 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
                 return;
             }
 
+            if (fileAccessLocations.length < 1 ) {
+                return;
+            }
+
             // else: start replicating
 
             // get nodes from MasterNode
