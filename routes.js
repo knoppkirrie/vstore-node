@@ -20,6 +20,32 @@ const REPLICATION_RETAINING_THRESHOLD = 7;  // in days
 
 var cron = require('node-cron');
 var request = require('request');
+
+// LOGGING
+const eventTypes = {
+    RECEIVE_UPLOAD : "RECEIVE_UPLOAD",
+    RECEIVE_REPLICATION : "RECEIVE_REPLICATION",
+    SERVE_ORIGINAL_FILE : "SERVE_ORIGINAL_FILE",
+    SERVE_REPLICATION : "SERVE_REPLICATION",
+    ALREADY_REPLICATED : "ALREAY_REPLICATED",
+    RECEIVE_FILEACCESS : "RECEIVE_FILEACCESS",
+    RESET_FILEACCESSLOCATION : "RESET_FILEACCESSLOCATION",
+    REPLICATION_CRONJOB : "REPLICATION_CRONJOB",
+    RETAINING_CRONJOB : "RETAINING_CRONJOB",
+    DELETE_REPLICATION : "DELETE_REPLICATION",
+    TRIGGER_REPLICATION : "TRIGGER_REPLICATION"
+}
+
+if(!fs.existsSync("./log")) {
+    fs.mkdirSync("./log");
+}
+const LOG_FILE = "./log/" + (new Date().toISOString().replace(/:/g, "-") + ".csv");
+
+var logStream = fs.createWriteStream(LOG_FILE, {flags:'a'});
+logStream.on("open", function(fd) {
+    logStream.write("Timestamp, EventType, vStore-UUID, Obj_id, targetNode\n");
+});
+
 // ----- REPLICATION vars and consts above -----
 
 if(!fs.existsSync(tmp_thumb_dir)) {
@@ -89,6 +115,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
         var phoneID = req.body.phoneID;
 
         console.log("        UUID: " + uuid);
+
+        fileLog(eventTypes.RECEIVE_UPLOAD, uuid, "", "");
 
         //Compute MD5 hash of uploaded file synchronously and check if
         //this file is already in the database
@@ -479,7 +507,13 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
                 readstream.pipe(res);
 
                 // if file is a replicated copy, update lastAccess timestamp
-                m.ReplicatedFile.findByIdAndUpdate(fUUID, {"lastAccess": Date.now()}, function(err, result) { });
+                m.ReplicatedFile.findByIdAndUpdate(fUUID, {"lastAccess": Date.now()}, function(err, result) {
+                    if (result) {
+                        fileLog(eventTypes.SERVE_REPLICATION, fUUID, "", "");
+                    } else {
+                        fileLog(eventTypes.SERVE_ORIGINAL_FILE, fUUID, "", "");
+                    }
+                 });
 
             });
         });
@@ -735,6 +769,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
 
         var fileModel = new m.File(metadata);
 
+        fileLog(eventTypes.RECEIVE_REPLICATION, uuid, "", "");
+
         // check if file is already present:
         m.File.findOne({uuid: metadata.uuid}, function(error, file) {
             if (error) {
@@ -746,7 +782,10 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
 
             if (file) {
                 console.log('['+getDateTime()+'] File already present on this node.');
-                res.status(200).json({"error": 0, "msg": "Replication succeeded: File is already here."})
+                res.status(200).json({"error": 0, "msg": "Replication succeeded: File is already here."});
+
+                fileLog(eventTypes.ALREADY_REPLICATED, uuid, "", "");
+
                 return;
             }
 
@@ -908,6 +947,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
             var timestamp = array[i].timestamp;
             var deviceId = array[i].deviceId;
 
+            fileLog(eventTypes.RECEIVE_FILEACCESS, "", uuid, "");
+
             // combine fileUuid and geohash substring, according to GEOHASH_COMPARE_PRECISION 
             var fileHashPair = file + '###' + geohash.substring(0, GEOHASH_COMPARE_PRECISION);   // separate by '###' to bypass object equality check in Set
 
@@ -960,6 +1001,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
             res.status = 400;
             return;
         }
+
+        fileLog(eventTypes.RESET_FILEACCESSLOCATION, req.body.file, "", "");
 
         // reset all FileAccessLocations whose replication node was the remote one
         for (var i = 0; i < req.body.geohash_prefix.length; i++) {
@@ -1077,6 +1120,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
     // cron-job running regularly to identify which files to replicate
     cron.schedule('*/10 * * * * *', function() {
         // console.log("[" + getDateTime() + "] Replication cron job running!")
+
+        fileLog(eventTypes.REPLICATION_CRONJOB, "", "", "");
 
         // get all FileAccessLocations that are above counter threshold and have not yet been replicated
         m.FileAccessLocation.find({counter: {$gt: REPLICATION_COUNTER_THRESHOLD}, replicated: false}, function(err, fileAccessLocations) {
@@ -1206,7 +1251,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
                                             return;
                                         }
                                         
-                                        
+                                        fileLog(eventTypes.TRIGGER_REPLICATION, fileUuid, "", nodeUrlPort);
+
                                         request(options, function(error, response, body) {
                                             if (error) {
                                                 console.log("[" + getDateTime() + "] Error replicating file:");
@@ -1253,7 +1299,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
     // for more than REPLICATION_RETAINING_THRESHOLD days
     
     cron.schedule("* * * * *", function() {
-    // app.get("/test_Remove", function(req, res) { //})
+
+        fileLog(eventTypes.RETAINING_CRONJOB, "", "", "");
 
         // transform retaining threshold into milliseconds, as this value is saved in the db
         const retaining_ms = REPLICATION_RETAINING_THRESHOLD * 24 * 60 * 60 * 1000;
@@ -1270,6 +1317,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
             if (replications && replications.length > 0) {
 
                 replications.forEach( function(replicatedFile) {
+
+                    fileLog(eventTypes.DELETE_REPLICATION, replicatedFile._id, "", "");
 
                     // delete file from MongoDB
                     m.File.deleteMany({"uuid": replicatedFile._id}, function(err){ });
@@ -1378,6 +1427,13 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
             
         });
 
+    }
+
+    function fileLog(eventType, vstoreUuid, obj_id, targetNode) {
+
+        var logContent = (new Date().toISOString()) + "," + eventType + "," + vstoreUuid + "," + obj_id + "," + targetNode + "\n";
+
+        logStream.write(logContent);
     }
 
     //*************************//

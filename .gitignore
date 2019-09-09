@@ -11,3 +11,7 @@ node_modules/
 
 # tmp folders
 tmp_upload/
+tmp_replication/
+
+# log folder 
+log/
