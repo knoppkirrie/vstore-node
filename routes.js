@@ -1019,7 +1019,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
     app.post('/replication/reset', function(req, res) {
 
         if (!req.body.file || !req.body.geohash_prefix) {
-            res.status = 400;
+            res.status(400).json({'error':1, 'error_msg':"Malformed request."});
             return;
         }
 
@@ -1031,11 +1031,16 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
             m.FileAccessLocation.updateMany({file: req.body.file, geohash: new RegExp('^' + req.body.geohash_prefix[i])}, {$set: {counter: 0, replicated: false}}, function(err) {
                 if (err) {
                     console.log("["+getDateTime()+"] Error resetting FileAccessLocations in MongoDB.");
-                    res.status = 500;
+                    res.status(500).json({'error':1, 'error_msg':"Internal server error."});;
+
+                    fileLog("RESET_ERROR", req.body.file, req.body.geohash_prefix[i], "");
+
                     return;
                 }
     
-                res.status = 200;
+                fileLog("RESET_SUCCESS", req.body.file, req.body.geohash_prefix[i], "");
+
+                res.status(200).json({'error':0, 'msg':"Replication reset."});;
                 return;
             });
 
