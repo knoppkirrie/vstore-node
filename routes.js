@@ -35,17 +35,20 @@ const eventTypes = {
     DELETE_REPLICATION : "DELETE_REPLICATION",
     TRIGGER_REPLICATION : "TRIGGER_REPLICATION",
     SAVED_REPLICATION : "SAVED_REPLICATION",
-    REPLICATION_ERROR : "REPLICATION_ERROR"
+    REPLICATION_ERROR : "REPLICATION_ERROR",
+    NODE_CONNECTED : "NODE_CONNECTED"
 }
 
 if(!fs.existsSync("./log")) {
     fs.mkdirSync("./log");
 }
-const LOG_FILE = "./log/" + (new Date().toISOString().replace(/:/g, "-") + ".csv");
+//const LOG_FILE = "./log/" + (new Date().toISOString().replace(/:/g, "-") + ".csv");
+const LOG_FILE = "../node_logging.csv";
 
 var logStream = fs.createWriteStream(LOG_FILE, {flags:'a'});
 logStream.on("open", function(fd) {
-    logStream.write("Timestamp, EventType, vStore-UUID, Obj_id, targetNode\n");
+    //logStream.write("Timestamp, EventType, vStore-UUID, Obj_id, targetNode\n");
+    logStream.write(new Date().toISOString() + ", , " + eventTypes.NODE_CONNECTED + ", , , , \n");
 });
 
 // ----- REPLICATION vars and consts above -----
@@ -1452,7 +1455,8 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
 
     function fileLog(eventType, vstoreUuid, obj_id, targetNode) {
 
-        var logContent = (new Date().toISOString()) + "," + eventType + "," + vstoreUuid + "," + obj_id + "," + targetNode + "\n";
+        // "Timestamp, NODE_PORT, EventType, vStore-UUID, Obj_id, targetNode\n"
+        var logContent = (new Date().toISOString()) + "," + NODE_PORT + ", " + eventType + "," + vstoreUuid + "," + obj_id + "," + targetNode + "\n";
 
         logStream.write(logContent);
     }
