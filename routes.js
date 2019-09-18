@@ -6,7 +6,7 @@ const md5File = require('md5-file');
 // ----- REPLICATION vars and consts below -----
 var tmp_replication_dir = "./tmp_replication";
 
-var MASTER_NODE_URL = "http://localhost";
+var MASTER_NODE_URL = "http://ec2-35-156-157-137.eu-central-1.compute.amazonaws.com";
 var MASTER_NODE_PORT = 50000;
 var MASTER_API_VERSION = "v1";
 
@@ -33,7 +33,9 @@ const eventTypes = {
     REPLICATION_CRONJOB : "REPLICATION_CRONJOB",
     RETAINING_CRONJOB : "RETAINING_CRONJOB",
     DELETE_REPLICATION : "DELETE_REPLICATION",
-    TRIGGER_REPLICATION : "TRIGGER_REPLICATION"
+    TRIGGER_REPLICATION : "TRIGGER_REPLICATION",
+    SAVED_REPLICATION : "SAVED_REPLICATION",
+    REPLICATION_ERROR : "REPLICATION_ERROR"
 }
 
 if(!fs.existsSync("./log")) {
@@ -915,7 +917,23 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
                 src_port: req.body.src_port
             };
             var replicatedFile = new m.ReplicatedFile(replicatedFileData);
-            replicatedFile.save(function(err){});
+            
+            replicatedFile.markModified('object');
+            
+            replicatedFile.save(function(err){
+
+                if (err) {
+                    console.log('['+getDateTime()+'] Error saving ReplicatedFile!');
+                    console.log('       ' + err);
+
+                    fileLog(eventTypes.REPLICATION_ERROR, replicatedFile._id, replicatedFile.src_address, replicatedFile.src_port);
+
+                    return;
+                }
+
+                fileLog(eventTypes.SAVED_REPLICATION, replicatedFile._id, replicatedFile.src_address, replicatedFile.src_port);
+
+            });
 
         });      
 
@@ -1298,12 +1316,15 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
     // cron-job sorting out replicated files that have not been accessed 
     // for more than REPLICATION_RETAINING_THRESHOLD days
     
-    cron.schedule("* * * * *", function() {
+    cron.schedule("*/15 * * * * *", function() {
 
         fileLog(eventTypes.RETAINING_CRONJOB, "", "", "");
 
         // transform retaining threshold into milliseconds, as this value is saved in the db
-        const retaining_ms = REPLICATION_RETAINING_THRESHOLD * 24 * 60 * 60 * 1000;
+        var retaining_ms = REPLICATION_RETAINING_THRESHOLD * 24 * 60 * 60 * 1000;
+
+        // ADAPTION OF TIME THRESHOLD FOR SIMULATION: 15s
+        retaining_ms = 15000;
 
         // get all replicated files that exceed the threshold
         m.ReplicatedFile.find({"lastAccess": {$lt: Date.now() - retaining_ms}}, function(err, replications) {
