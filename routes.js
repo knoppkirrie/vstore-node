@@ -1023,22 +1023,24 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
             return;
         }
 
-        fileLog(eventTypes.RESET_FILEACCESSLOCATION, req.body.file, "", "");
+        fileLog(eventTypes.RESET_FILEACCESSLOCATION, req.body.file, req.body.geohash_prefix, req.body.geohash_prefix.length);
+        
 
         // reset all FileAccessLocations whose replication node was the remote one
-        for (var i = 0; i < req.body.geohash_prefix.length; i++) {
+        //for (var i = 0; i < req.body.geohash_prefix.length; i++) {
+        for (var prefix of req.body.geohash_prefix) {
 
-            m.FileAccessLocation.updateMany({file: req.body.file, geohash: new RegExp('^' + req.body.geohash_prefix[i])}, {$set: {counter: 0, replicated: false}}, function(err) {
+            m.FileAccessLocation.updateMany({file: req.body.file, geohash: new RegExp('^' + prefix)}, {$set: {counter: 0, replicated: false}}, function(err) {
                 if (err) {
                     console.log("["+getDateTime()+"] Error resetting FileAccessLocations in MongoDB.");
                     res.status(500).json({'error':1, 'error_msg':"Internal server error."});;
 
-                    fileLog("RESET_ERROR", req.body.file, req.body.geohash_prefix[i], "");
+                    fileLog("RESET_ERROR", req.body.file, prefix, "");
 
                     return;
                 }
     
-                fileLog("RESET_SUCCESS", req.body.file, req.body.geohash_prefix[i], "");
+                fileLog("RESET_SUCCESS", req.body.file, prefix, "");
 
                 res.status(200).json({'error':0, 'msg':"Replication reset."});;
                 return;
