@@ -1368,7 +1368,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
                         method: "DELETE",
                         json: removedNodeMapping
                     }
-                    request.post(payload, function(err, res, body){
+                    request.delete(payload, function(err, res, body){
                         if(err) {
                             console.log("["+getDateTime()+"] Cannot inform master node about file mapping!");
                             return;
