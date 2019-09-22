@@ -1033,7 +1033,7 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
             m.FileAccessLocation.updateMany({file: req.body.file, geohash: new RegExp('^' + prefix)}, {$set: {counter: 0, replicated: false}}, function(err) {
                 if (err) {
                     console.log("["+getDateTime()+"] Error resetting FileAccessLocations in MongoDB.");
-                    res.status(500).json({'error':1, 'error_msg':"Internal server error."});;
+                    res.status(500).json({'error':1, 'error_msg':"Internal server error."});
 
                     fileLog("RESET_ERROR", req.body.file, prefix, "");
 
@@ -1041,12 +1041,12 @@ module.exports = function(app, upload, mongoose, dbConn, NODE_UUID, NODE_TYPE, N
                 }
     
                 fileLog("RESET_SUCCESS", req.body.file, prefix, "");
-
-                res.status(200).json({'error':0, 'msg':"Replication reset."});;
-                return;
+                
             });
 
         }
+
+        res.status(200).json({'error':0, 'msg':"Replication reset."});
         
     });
 
